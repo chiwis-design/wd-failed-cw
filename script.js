@@ -7,7 +7,6 @@ const processBtn = document.getElementById("processBtn");
 const resetBtn = document.getElementById("resetBtn");
 const copyBtn = document.getElementById("copyBtn");
 
-// MEMBERSIHKAN DATA
 function clean(value) {
   return String(value || "")
     .replace(/&nbsp;/gi, " ")
@@ -17,15 +16,22 @@ function clean(value) {
     .trim();
 }
 
-// FORMAT NOMINAL
 function formatNominal(value) {
-  const number = clean(value).replace(/[^\d]/g, "");
-  if (!number) return "";
-
-  return Number(number).toLocaleString("id-ID");
+  const digits = clean(value).replace(/[^\d]/g, "");
+  return digits ? Number(digits).toLocaleString("id-ID") : "";
 }
 
-// PROSES DATA OTOMATIS
+function isPhone(value) {
+  const digits = clean(value).replace(/\D/g, "");
+  return /^\+?[\d\s().-]+$/.test(clean(value)) &&
+    digits.length >= 9 && digits.length <= 15;
+}
+
+function isNominal(value) {
+  return /^[\d.,\s]+$/.test(clean(value)) &&
+    clean(value).replace(/\D/g, "").length > 0;
+}
+
 function processData() {
   const raw = inputData.value.trim();
 
@@ -37,95 +43,129 @@ function processData() {
 
   const lines = raw
     .split(/\r?\n/)
-    .map(line => line.trim())
+    .map(clean)
     .filter(Boolean);
 
   let transactions = [];
 
-  // FORMAT 2: TABEL MARKDOWN / PIPE
+  // FORMAT TABEL PIPE
   if (lines.some(line => line.includes("|"))) {
-
     const rows = lines
       .filter(line => !/^\s*\|?\s*:?-{3,}/.test(line))
-      .map(line =>
-        line.split("|")
-          .map(cell => clean(cell))
-          .filter((cell, index, arr) =>
-            !(index === 0 && cell === "") &&
-            !(index === arr.length - 1 && cell === "")
-          )
-      );
+      .map(line => {
+        let cells = line.split("|").map(clean);
+        if (!cells[0]) cells.shift();
+        if (!cells[cells.length - 1]) cells.pop();
+        return cells;
+      })
+      .filter(row => row.length >= 5);
 
-    const headers = rows[0].map(h =>
-      h.toUpperCase().trim()
-    );
+    if (rows.length) {
+      const headers = rows[0].map(v => v.toUpperCase());
+      const hasHeader = ["ID", "NAMA", "BANK", "NOMOR", "NOMINAL"]
+        .every(h => headers.includes(h));
 
-    const idIndex = headers.indexOf("ID");
-    const namaIndex = headers.indexOf("NAMA");
-    const bankIndex = headers.indexOf("BANK");
-    const nomorIndex = headers.indexOf("NOMOR");
-    const nominalIndex = headers.indexOf("NOMINAL");
+      const idx = hasHeader ? {
+        id: headers.indexOf("ID"),
+        nama: headers.indexOf("NAMA"),
+        bank: headers.indexOf("BANK"),
+        nomor: headers.indexOf("NOMOR"),
+        nominal: headers.indexOf("NOMINAL")
+      } : {
+        id: 0, nama: 1, bank: 2, nomor: 3, nominal: 4
+      };
 
-    if ([idIndex, namaIndex, bankIndex, nomorIndex, nominalIndex]
-      .some(index => index === -1)) {
-      status.textContent = "⚠ Kolom tabel tidak dikenali!";
-      outputData.value = "";
-      return;
-    }
-
-    rows.slice(1).forEach(row => {
-      if (row.length < headers.length) return;
-
-      transactions.push({
-        id: row[idIndex],
-        nama: row[namaIndex],
-        bank: row[bankIndex],
-        nomor: row[nomorIndex],
-        nominal: row[nominalIndex]
+      (hasHeader ? rows.slice(1) : rows).forEach(row => {
+        transactions.push({
+          id: row[idx.id],
+          nama: row[idx.nama],
+          bank: row[idx.bank],
+          nomor: row[idx.nomor],
+          nominal: row[idx.nominal]
+        });
       });
-    });
-
+    }
   }
 
-  // FORMAT 1: LIMA BARIS PER TRANSAKSI
+  // FORMAT TIGA BARIS:
+  // ID NAMA BANK
+  // NOMOR HP
+  // NOMINAL
   else {
+    let foundThreeLine = false;
 
-    for (let i = 0; i + 4 < lines.length; i += 5) {
-      transactions.push({
-        bank: clean(lines[i]),
-        nomor: clean(lines[i + 1]),
-        nama: clean(lines[i + 2]),
-        nominal: clean(lines[i + 3]),
-        id: clean(lines[i + 4])
+    for (let i = 1; i < lines.length - 1; i++) {
+      if (
+        isPhone(lines[i]) &&
+        isNominal(lines[i + 1])
+      ) {
+        const identity = lines[i - 1].trim().split(/\s+/);
+
+        if (identity.length >= 3) {
+          transactions.push({
+            id: identity[0],
+            nama: identity.slice(1, -1).join(" "),
+            bank: identity[identity.length - 1],
+            nomor: lines[i],
+            nominal: lines[i + 1]
+          });
+
+          foundThreeLine = true;
+        }
+      }
+    }
+
+    // FORMAT TAB 5 KOLOM
+    if (!foundThreeLine && lines.some(line => line.includes("\t"))) {
+      lines.forEach(line => {
+        const row = line.split("\t").map(clean);
+        if (row.length < 5) return;
+
+        transactions.push({
+          id: row[0],
+          nama: row[1],
+          bank: row[2],
+          nomor: row[3],
+          nominal: row[4]
+        });
       });
     }
 
+    // FORMAT LAMA 5 BARIS
+    if (!foundThreeLine && !lines.some(line => line.includes("\t"))) {
+      for (let i = 0; i + 4 < lines.length; i += 5) {
+        transactions.push({
+          bank: lines[i],
+          nomor: lines[i + 1],
+          nama: lines[i + 2],
+          nominal: lines[i + 3],
+          id: lines[i + 4]
+        });
+      }
+    }
   }
 
-  // SUSUN HASIL AKHIR
   const results = transactions
     .filter(t =>
       t.id && t.nama && t.bank && t.nomor && t.nominal
     )
-    .map(t => {
-      return [
-        `ID : ${clean(t.id)}`,
-        `${clean(t.bank)},${clean(t.nama)},${clean(t.nomor)}`,
-        `NOMINAL : ${formatNominal(t.nominal)}`
-      ].join("\n");
-    });
+    .map(t => [
+      `ID : ${clean(t.id)}`,
+      `${clean(t.bank)},${clean(t.nama)},${clean(t.nomor)}`,
+      `NOMINAL : ${formatNominal(t.nominal)}`
+    ].join("\n"));
 
   outputData.value = results.join("\n\n");
 
   status.textContent = results.length
     ? `✓ Berhasil membaca ${results.length} transaksi!`
-    : "⚠ Data belum sesuai format!";
+    : "⚠ Format data belum sesuai atau belum lengkap.";
 }
 
-// OTOMATIS SAAT INPUT / PASTE
+// PROSES OTOMATIS
 inputData.addEventListener("input", processData);
 
-// TOMBOL PROSES TETAP BERFUNGSI
+// TOMBOL PROSES
 if (processBtn) {
   processBtn.addEventListener("click", processData);
 }

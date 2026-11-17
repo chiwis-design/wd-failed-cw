@@ -7,15 +7,25 @@ const processBtn = document.getElementById("processBtn");
 const resetBtn = document.getElementById("resetBtn");
 const copyBtn = document.getElementById("copyBtn");
 
+// MEMBERSIHKAN DATA
+function clean(value) {
+  return String(value || "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#x20;/gi, " ")
+    .replace(/&#32;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .trim();
+}
+
 // FORMAT NOMINAL
 function formatNominal(value) {
-  const number = String(value).replace(/[^\d]/g, "");
-  if (!number) return value;
+  const number = clean(value).replace(/[^\d]/g, "");
+  if (!number) return "";
 
   return Number(number).toLocaleString("id-ID");
 }
 
-// PROSES DATA
+// PROSES DATA OTOMATIS
 function processData() {
   const raw = inputData.value.trim();
 
@@ -28,99 +38,94 @@ function processData() {
   const lines = raw
     .split(/\r?\n/)
     .map(line => line.trim())
-    .filter(line => line !== "");
+    .filter(Boolean);
 
   let transactions = [];
 
-  // FORMAT TABEL DENGAN PEMISAH | ATAU TAB
-  if (
-    lines.some(line => line.includes("|") || line.includes("\t"))
-  ) {
-    const rows = lines.map(line =>
-      line.split(/\s*\|\s*|\t/).map(v => v.trim())
+  // FORMAT 2: TABEL MARKDOWN / PIPE
+  if (lines.some(line => line.includes("|"))) {
+
+    const rows = lines
+      .filter(line => !/^\s*\|?\s*:?-{3,}/.test(line))
+      .map(line =>
+        line.split("|")
+          .map(cell => clean(cell))
+          .filter((cell, index, arr) =>
+            !(index === 0 && cell === "") &&
+            !(index === arr.length - 1 && cell === "")
+          )
+      );
+
+    const headers = rows[0].map(h =>
+      h.toUpperCase().trim()
     );
 
-    const headerIndex = rows.findIndex(row =>
-      row.some(cell => cell.toUpperCase() === "BANK") &&
-      row.some(cell => cell.toUpperCase() === "NOMOR")
-    );
+    const idIndex = headers.indexOf("ID");
+    const namaIndex = headers.indexOf("NAMA");
+    const bankIndex = headers.indexOf("BANK");
+    const nomorIndex = headers.indexOf("NOMOR");
+    const nominalIndex = headers.indexOf("NOMINAL");
 
-    if (headerIndex !== -1) {
-      const headers = rows[headerIndex].map(v => v.toUpperCase());
-
-      const bankIndex = headers.indexOf("BANK");
-      const nomorIndex = headers.indexOf("NOMOR");
-      const namaIndex = headers.indexOf("NAMA");
-      const nominalIndex = headers.indexOf("NOMINAL");
-      const idIndex = headers.indexOf("ID");
-
-      rows.slice(headerIndex + 1).forEach(row => {
-        if (row.length < headers.length) return;
-
-        transactions.push({
-          bank: row[bankIndex],
-          nomor: row[nomorIndex],
-          nama: row[namaIndex],
-          nominal: row[nominalIndex],
-          id: row[idIndex]
-        });
-      });
-    } else {
-      rows.forEach(row => {
-        if (row.length >= 5) {
-          transactions.push({
-            bank: row[0],
-            nomor: row[1],
-            nama: row[2],
-            nominal: row[3],
-            id: row[4]
-          });
-        }
-      });
+    if ([idIndex, namaIndex, bankIndex, nomorIndex, nominalIndex]
+      .some(index => index === -1)) {
+      status.textContent = "⚠ Kolom tabel tidak dikenali!";
+      outputData.value = "";
+      return;
     }
+
+    rows.slice(1).forEach(row => {
+      if (row.length < headers.length) return;
+
+      transactions.push({
+        id: row[idIndex],
+        nama: row[namaIndex],
+        bank: row[bankIndex],
+        nomor: row[nomorIndex],
+        nominal: row[nominalIndex]
+      });
+    });
+
   }
 
-  // FORMAT 5 BARIS PER TRANSAKSI
+  // FORMAT 1: LIMA BARIS PER TRANSAKSI
   else {
+
     for (let i = 0; i + 4 < lines.length; i += 5) {
       transactions.push({
-        bank: lines[i],
-        nomor: lines[i + 1],
-        nama: lines[i + 2],
-        nominal: lines[i + 3],
-        id: lines[i + 4]
+        bank: clean(lines[i]),
+        nomor: clean(lines[i + 1]),
+        nama: clean(lines[i + 2]),
+        nominal: clean(lines[i + 3]),
+        id: clean(lines[i + 4])
       });
     }
+
   }
 
-  // SUSUN HASIL
+  // SUSUN HASIL AKHIR
   const results = transactions
     .filter(t =>
-      t.bank && t.nomor && t.nama && t.nominal && t.id
+      t.id && t.nama && t.bank && t.nomor && t.nominal
     )
     .map(t => {
       return [
-        `ID : ${t.id}`,
-        `${t.bank},${t.nama},${t.nomor}`,
+        `ID : ${clean(t.id)}`,
+        `${clean(t.bank)},${clean(t.nama)},${clean(t.nomor)}`,
         `NOMINAL : ${formatNominal(t.nominal)}`
       ].join("\n");
     });
 
   outputData.value = results.join("\n\n");
 
-  if (results.length > 0) {
-    status.textContent =
-      `✓ Berhasil membaca ${results.length} transaksi!`;
-  } else {
-    status.textContent =
-      "⚠ Format data belum sesuai atau belum lengkap.";
-  }
+  status.textContent = results.length
+    ? `✓ Berhasil membaca ${results.length} transaksi!`
+    : "⚠ Data belum sesuai format!";
 }
 
-// OTOMATIS SAAT MENGETIK / PASTE
+// OTOMATIS SAAT INPUT / PASTE
 inputData.addEventListener("input", processData);
 
-// TOMBOL PROSES MANUAL TETAP BISA DIGUNAKAN
+// TOMBOL PROSES TETAP BERFUNGSI
 if (processBtn) {
   processBtn.addEventListener("click", processData);
 }
@@ -138,7 +143,7 @@ if (resetBtn) {
 if (copyBtn) {
   copyBtn.addEventListener("click", async () => {
     if (!outputData.value.trim()) {
-      status.textContent = "⚠ Belum ada hasil untuk disalin!";
+      status.textContent = "⚠ Belum ada hasil!";
       return;
     }
 

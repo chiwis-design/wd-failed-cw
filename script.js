@@ -23,13 +23,16 @@ function formatNominal(value) {
 
 function isPhone(value) {
   const digits = clean(value).replace(/\D/g, "");
-  return /^\+?[\d\s().-]+$/.test(clean(value)) &&
-    digits.length >= 9 && digits.length <= 15;
+  return digits.length >= 9 && digits.length <= 15;
+}
+
+function isDate(value) {
+  return /^\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\s+\d{1,2}:\d{2}$/.test(clean(value));
 }
 
 function isNominal(value) {
   return /^[\d.,\s]+$/.test(clean(value)) &&
-    clean(value).replace(/\D/g, "").length > 0;
+    /\d/.test(clean(value));
 }
 
 function processData() {
@@ -65,15 +68,15 @@ function processData() {
       const hasHeader = ["ID", "NAMA", "BANK", "NOMOR", "NOMINAL"]
         .every(h => headers.includes(h));
 
-      const idx = hasHeader ? {
-        id: headers.indexOf("ID"),
-        nama: headers.indexOf("NAMA"),
-        bank: headers.indexOf("BANK"),
-        nomor: headers.indexOf("NOMOR"),
-        nominal: headers.indexOf("NOMINAL")
-      } : {
-        id: 0, nama: 1, bank: 2, nomor: 3, nominal: 4
-      };
+      const idx = hasHeader
+        ? {
+            id: headers.indexOf("ID"),
+            nama: headers.indexOf("NAMA"),
+            bank: headers.indexOf("BANK"),
+            nomor: headers.indexOf("NOMOR"),
+            nominal: headers.indexOf("NOMINAL")
+          }
+        : { id: 0, nama: 1, bank: 2, nomor: 3, nominal: 4 };
 
       (hasHeader ? rows.slice(1) : rows).forEach(row => {
         transactions.push({
@@ -81,79 +84,128 @@ function processData() {
           nama: row[idx.nama],
           bank: row[idx.bank],
           nomor: row[idx.nomor],
-          nominal: row[idx.nominal]
+          nominal: row[idx.nominal],
+          tanggal: ""
         });
       });
     }
   }
 
-  // FORMAT TIGA BARIS:
-  // ID NAMA BANK
-  // NOMOR HP
+  // FORMAT TANGGAL: 6 BARIS
+  // TANGGAL
+  // BANK
+  // NOMOR
+  // NAMA
   // NOMINAL
-  else {
-    let foundThreeLine = false;
+  // ID
+  else if (lines.some(isDate)) {
+    let i = 0;
 
-    for (let i = 1; i < lines.length - 1; i++) {
-      if (
-        isPhone(lines[i]) &&
-        isNominal(lines[i + 1])
-      ) {
-        const identity = lines[i - 1].trim().split(/\s+/);
+    while (i < lines.length) {
+      if (isDate(lines[i]) && i + 5 < lines.length) {
+        transactions.push({
+          tanggal: lines[i],
+          bank: lines[i + 1],
+          nomor: lines[i + 2],
+          nama: lines[i + 3],
+          nominal: lines[i + 4],
+          id: lines[i + 5]
+        });
 
-        if (identity.length >= 3) {
-          transactions.push({
-            id: identity[0],
-            nama: identity.slice(1, -1).join(" "),
-            bank: identity[identity.length - 1],
-            nomor: lines[i],
-            nominal: lines[i + 1]
-          });
-
-          foundThreeLine = true;
-        }
+        i += 6;
+      } else {
+        i++;
       }
     }
+  }
 
-    // FORMAT TAB 5 KOLOM
-    if (!foundThreeLine && lines.some(line => line.includes("\t"))) {
-      lines.forEach(line => {
-        const row = line.split("\t").map(clean);
-        if (row.length < 5) return;
+  // FORMAT 3 BARIS
+  // ID NAMA BANK
+  // NOMOR
+  // NOMINAL
+  else if (lines.some(line => line.includes("\t"))) {
+    lines.forEach(line => {
+      const row = line.split("\t").map(clean);
+      if (row.length < 5) return;
 
-        transactions.push({
-          id: row[0],
-          nama: row[1],
-          bank: row[2],
-          nomor: row[3],
-          nominal: row[4]
-        });
+      transactions.push({
+        id: row[0],
+        nama: row[1],
+        bank: row[2],
+        nomor: row[3],
+        nominal: row[4],
+        tanggal: ""
       });
-    }
+    });
+  }
 
-    // FORMAT LAMA 5 BARIS
-    if (!foundThreeLine && !lines.some(line => line.includes("\t"))) {
-      for (let i = 0; i + 4 < lines.length; i += 5) {
+  // FORMAT IDENTITAS + NOMOR + NOMINAL
+  else {
+    let i = 0;
+
+    while (i < lines.length) {
+      if (
+        i + 2 < lines.length &&
+        isPhone(lines[i + 1]) &&
+        isNominal(lines[i + 2])
+      ) {
+        const parts = lines[i].split(/\s+/);
+
+        if (parts.length >= 3) {
+          transactions.push({
+            id: parts[0],
+            nama: parts.slice(1, -1).join(" "),
+            bank: parts[parts.length - 1],
+            nomor: lines[i + 1],
+            nominal: lines[i + 2],
+            tanggal: ""
+          });
+
+          i += 3;
+          continue;
+        }
+      }
+
+      // FORMAT LAMA 5 BARIS
+      if (i + 4 < lines.length) {
         transactions.push({
           bank: lines[i],
           nomor: lines[i + 1],
           nama: lines[i + 2],
           nominal: lines[i + 3],
-          id: lines[i + 4]
+          id: lines[i + 4],
+          tanggal: ""
         });
+
+        i += 5;
+      } else {
+        i++;
       }
     }
   }
 
+  // HASIL AKHIR
   const results = transactions
     .filter(t =>
-      t.id && t.nama && t.bank && t.nomor && t.nominal
+      t.id &&
+      t.nama &&
+      t.bank &&
+      t.nomor &&
+      t.nominal
     )
-    .map(t => [
-      `ID : ${clean(t.id)}`,
-      `${clean(t.bank)},${clean(t.nama)},${clean(t.nomor)}`,
-      `NOMINAL : ${formatNominal(t.nominal)}`
-    ].join("\n"));
+    .map(t => {
+      const result = [
+        `ID : ${clean(t.id)}`,
+        `${clean(t.bank)},${clean(t.nama)},${clean(t.nomor)}`,
+        `NOMINAL : ${formatNominal(t.nominal)}`
+      ];
+
+      if (t.tanggal) {
+        result.push(`TANGGAL : ${clean(t.tanggal)}`);
+      }
+
+      return result.join("\n");
+    });
 
   outputData.value = results.join("\n\n");
 
@@ -162,10 +214,10 @@ function processData() {
     : "⚠ Format data belum sesuai atau belum lengkap.";
 }
 
-// PROSES OTOMATIS
+// AUTO PROCESS
 inputData.addEventListener("input", processData);
 
-// TOMBOL PROSES
+// BUTTON PROCESS
 if (processBtn) {
   processBtn.addEventListener("click", processData);
 }
@@ -179,7 +231,7 @@ if (resetBtn) {
   });
 }
 
-// SALIN HASIL
+// COPY
 if (copyBtn) {
   copyBtn.addEventListener("click", async () => {
     if (!outputData.value.trim()) {
@@ -190,7 +242,7 @@ if (copyBtn) {
     try {
       await navigator.clipboard.writeText(outputData.value);
       status.textContent = "✓ Hasil berhasil disalin!";
-    } catch (error) {
+    } catch {
       outputData.select();
       document.execCommand("copy");
       status.textContent = "✓ Hasil berhasil disalin!";
